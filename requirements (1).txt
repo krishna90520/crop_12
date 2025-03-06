@@ -1,7 +1,9 @@
+-f https://download.pytorch.org/whl/cpu/torch_stable.html
+
 streamlit
-torch==2.1.0
-torchvision==0.16.0
-torchaudio==2.1.0
+torch==2.1.0+cpu
+torchvision==0.16.0+cpu
+torchaudio==2.1.0+cpu
 
 Pillow
 numpy<2.0
@@ -9,4 +11,4 @@ rich
 opencv-python-headless==4.6.0.66
 IPython
 ultralytics
-setuptools  # Add this line
+setuptools>=65.0.0
