@@ -115,12 +115,14 @@ import subprocess
 from PIL import Image
 from torchvision import transforms
 
-# 📌 Ensure PyTorch is installed (important for Streamlit Cloud)
+import subprocess
+
+# 🛠️ Ensure PyTorch is installed in Streamlit Cloud
 try:
     import torch
 except ModuleNotFoundError:
     subprocess.run(["pip", "install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cpu/"])
-    import torch  # Import again after installation
+    import torch  # Try importing again after installation
 
 # 🌱 Set Streamlit environment variables
 os.environ["STREAMLIT_SERVER_ENABLE_WATCHER"] = "false"
