@@ -1,98 +1,100 @@
 import os
 import torch
-import torch.nn.functional as F
 import streamlit as st
-import numpy as np
 from PIL import Image
-from torchvision import transforms
-from pathlib import Path
+from torchvision import transforms  # For preprocessing the image before inference
 
-# --- Ensure Streamlit runs without auto-reload issues ---
-os.environ["STREAMLIT_SERVER_ENABLE_WATCHER"] = "false"
+# Set up environment variables
+os.environ["STREAMLIT_SERVER_ENABLE_WATCHER"] = "false"  # Disable problematic watcher
 
-# --- Define class labels for YOLOv5 classification ---
+# Mapping of crop names to their YOLOv5 classification models
+crop_model_mapping = {
+    "Paddy": "classification_4Disease_best.pt",
+    "Cotton": "re_do_cotton_2best.pt",
+    "Groundnut": "groundnut_best.pt"
+}
+
+# Define class labels for each crop
 CLASS_LABELS = {
     "Paddy": ["brown_spot", "leaf_blast", "rice_hispa", "sheath_blight"],
-    "GroundNut": ["alternaria_leaf_spot", "leaf_spot", "rosette", "rust"],
-    "Cotton": ["bacterial_blight", "curl_virus", "herbicide_growth_damage", "leaf_hopper_jassids", "leaf_redding", "leaf_variegation"]
+    "Groundnut": ["alternaria_leaf_spot", "leaf_spot", "rosette", "rust"],
+    "Cotton": ["bacterial_blight", "curl_virus", "herbicide_growth_damage",
+               "leaf_hopper_jassids", "leaf_redding", "leaf_variegation"]
 }
 
-# --- Model Download Links (Replace with your links) ---
-MODEL_URLS = {
-    "Paddy": "classification_4Disease_best.pt",
-    "GroundNut": "groundnut_best.pt",
-    "Cotton": "re_do_cotton_2best.pt"
-}
-
-# --- Function to Download Model ---
-def download_model(crop_type):
-    model_path = Path(f"{crop_type}.pt")
-    if not model_path.exists():
-        st.info(f"Downloading {crop_type} model...")
-        torch.hub.download_url_to_file(MODEL_URLS[crop_type], str(model_path))
-    return model_path
-
-# --- Load YOLOv5 Classification Model ---
+# Cache model loading to avoid reloading on every classification
 @st.cache_resource
-def load_model(crop_type):
-    model_path = download_model(crop_type)
+def load_model(crop_name):
+    """Loads the YOLOv5 model only once per crop type."""
     try:
-        model = torch.load(model_path, map_location=torch.device('cpu'))  # Load in CPU mode
-        model.eval()
+        model_path = crop_model_mapping.get(crop_name, None)
+        if model_path is None:
+            raise ValueError(f"No model found for crop: {crop_name}")
+
+        # Load model on CPU for inference
+        model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=False, device='cpu')
+        model.eval()  # Set model to evaluation mode
         return model
     except Exception as e:
-        st.error(f"Failed to load {crop_type} model: {e}")
+        st.error(f"Model loading failed: {str(e)}")
         return None
 
-# --- Image Preprocessing for YOLOv5 ---
-def preprocess_image(image):
-    transform = transforms.Compose([
-        transforms.Resize((640, 640)),  # Resize for YOLOv5 classification input
+# Preprocess image for model input
+def preprocess_image(img):
+    img = img.convert('RGB')  # Ensure the image is in RGB format
+    preprocess = transforms.Compose([
+        transforms.Resize((640, 640)),  # Resize to match YOLOv5 input size
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
-    return transform(image).unsqueeze(0)  # Add batch dimension
+    img_tensor = preprocess(img).unsqueeze(0)  # Add batch dimension
+    return img_tensor
 
-# --- Classification Function ---
-def classify_image(image, crop_type):
-    model = load_model(crop_type)
+# Perform classification
+def classify_image(img, crop_name):
+    model = load_model(crop_name)  # Load the model only once per crop
     if model is None:
         return None, None
 
-    image_tensor = preprocess_image(image)
+    img_tensor = preprocess_image(img)  # Preprocess the image
 
+    # Perform inference
     with torch.no_grad():
-        results = model(image_tensor)  # Perform inference
+        results = model(img_tensor)
 
-    if isinstance(results, torch.Tensor):
-        results = results.squeeze(0)  # Remove batch dimension if necessary
+    # Extract class predictions
+    output = results[0]  # This contains the raw class scores
+    confidence, class_idx = torch.max(output, dim=0)  # Get highest confidence class
 
-    probabilities = F.softmax(results, dim=0)  # Convert logits to probabilities
+    # Map index to class label
+    try:
+        class_label = CLASS_LABELS[crop_name][class_idx.item()]
+    except KeyError:
+        st.error(f"Error: '{crop_name}' not found in class labels. Please check the crop name.")
+        return None, None
 
-    predicted_idx = torch.argmax(probabilities).item()
-    predicted_label = CLASS_LABELS[crop_type][predicted_idx]
+    return class_label, confidence.item()
 
-    return predicted_label, probabilities.tolist()
+# Streamlit UI
+st.title("Crop Disease Detection")
 
-# --- Streamlit UI ---
-st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Crop Disease Classification</h1>", unsafe_allow_html=True)
-
-st.markdown("### Select the Crop Type")
-crop_selection = st.selectbox("Select the crop", ["Paddy", "GroundNut", "Cotton"], label_visibility="hidden")
+# Select crop type
+crop_selection = st.selectbox("Select the crop", ["Paddy", "Cotton", "Groundnut"])
 st.write(f"Selected Crop: {crop_selection}")
 
-uploaded_image = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+# Upload image
+uploaded_image = st.file_uploader("Upload an image...", type=["jpg", "jpeg", "png"])
 
 if uploaded_image:
     img = Image.open(uploaded_image).convert("RGB")
-    st.image(img, caption="Uploaded Image.", use_container_width=True)
+    st.image(img, caption="Uploaded Image", use_column_width=True)
 
-    if st.button("Classify Disease"):
+    if st.button("Run Classification"):
         with st.spinner("Classifying..."):
-            predicted_label, probabilities = classify_image(img, crop_selection)
+            predicted_class, confidence = classify_image(img, crop_selection)
 
-            if predicted_label:
-                st.success(f"Predicted Disease: {predicted_label}")
-                st.write(f"Confidence Scores: {probabilities}")
+            if predicted_class:
+                st.success(f"Prediction: {predicted_class} (Confidence: {confidence:.2f})")
             else:
-                st.error("Error in classification.")
+                st.error("Classification failed.")
+
+
